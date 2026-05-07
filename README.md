@@ -39,7 +39,7 @@
   issue_admin_url.php           # 主催者URLワンタイム発行
 
 /var/www/db/example.com/        ← データベース（httpdから見えない、g+w）
-  support.db                    # SQLiteデータベース
+  support.sq3                    # SQLiteデータベース
 ```
 
 ## セットアップ
@@ -75,7 +75,7 @@ chmod 775 /var/www/db/example.com
 ### 3. db.php の設定を編集
 
 ```php
-define('DB_PATH',  '/var/www/db/example.com/support.db'); // DBパス
+define('DB_PATH',  '/var/www/db/example.com/support.sq3'); // DBパス
 define('SITE_URL', 'https://example.com/support');         // サイトURL
 define('MAIL_FROM','info@example.com');                    // 差出人メールアドレス
 define('MAIL_STOP_THRESHOLD', 4);                          // 未アクセス何回でメール停止か
@@ -135,8 +135,8 @@ chown -R nginx:nginx /var/lib/php/session
 
 ```bash
 # 初回アクセス後
-chown nginx:nginx /var/www/db/example.com/support.db
-chmod 664 /var/www/db/example.com/support.db
+chown nginx:nginx /var/www/db/example.com/support.sq3
+chmod 664 /var/www/db/example.com/support.sq3
 ```
 
 ## 主催者アクセスURLの発行
@@ -165,7 +165,7 @@ ClaudeがSSH経由でVPS上の `php /var/www/scripts/example.com/support/issue_a
 
 ## データベース
 
-SQLiteファイルは `/var/www/db/example.com/support.db`（Webルート外）に配置するため、Nginxから直接ダウンロードできません。
+SQLiteファイルは `/var/www/db/example.com/support.sq3`（Webルート外）に配置するため、Nginxから直接ダウンロードできません。
 
 | テーブル | 内容 |
 |---|---|
