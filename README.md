@@ -9,7 +9,7 @@
 - 会員をメールアドレスで招待（トークンつきURL）
 - チャンネル制の掲示板（勉強会の質問 / 新着情報 / 参加者のご紹介）
 - チャンネルごとに投稿権限を設定可能（主催者のみ or 会員も投稿可）
-- 記事・コメントの投稿・削除
+- 記事・コメントの投稿・削除（記事削除時はコメントも一括削除）
 - 主催者が記事投稿時に「全員にメールを送る」チェックボックス
 - 主催者がコメント投稿時に「記事を書いた人にメールを送る」チェックボックス
 - 未アクセスが続く会員へのメール配信を自動停止（デフォルト4回）
@@ -27,16 +27,18 @@
 ## ファイル構成
 
 ```
-/var/www/html/support/          ← Webルート下のディレクトリ
+/var/www/example.com/support/   ← Webルート（nginx公開）
   index.php                     # 会員向けページ（トークン/cookie認証）
   admin.php                     # 主催者管理画面
   api.php                       # JSON API
-  admin_auth.php                # 主催者認証ロジック（直接アクセス禁止）
-  db.php                        # DB接続・共通関数（直接アクセス禁止）
-  issue_admin_url.php           # 主催者URLワンタイム発行（直接アクセス禁止）
   style.css                     # スタイルシート
 
-/var/lib/support/               ← Webルート外
+/var/www/scripts/example.com/support/   ← 内部PHP（httpdから見えない）
+  db.php                        # DB接続・共通関数
+  admin_auth.php                # 主催者認証ロジック
+  issue_admin_url.php           # 主催者URLワンタイム発行
+
+/var/www/db/example.com/        ← データベース（httpdから見えない、g+w）
   support.db                    # SQLiteデータベース
 ```
 
@@ -50,40 +52,56 @@ dnf install -y php php-fpm php-pdo php-sqlite3
 systemctl enable --now php-fpm
 ```
 
-### 2. ファイルの配置
+### 2. ディレクトリ作成とファイルの配置
 
 ```bash
-mkdir -p /var/www/html/support
-mkdir -p /var/lib/support
-chown nginx:nginx /var/lib/support
-chmod 750 /var/lib/support
+# Webルート
+mkdir -p /var/www/example.com/support
+chown -R nginx:nginx /var/www/example.com/support
 
-# ファイルをコピー後
-chown -R nginx:nginx /var/www/html/support
+# 内部スクリプト（root所有、nginxグループ読み取り可）
+mkdir -p /var/www/scripts/example.com/support
+chown -R root:nginx /var/www/scripts/example.com/support
+chmod 750 /var/www/scripts/example.com/support
+# ファイルコピー後
+chmod 640 /var/www/scripts/example.com/support/*.php
+
+# データベース（nginx書き込み可、グループ書き込み可）
+mkdir -p /var/www/db/example.com
+chown nginx:nginx /var/www/db/example.com
+chmod 775 /var/www/db/example.com
 ```
 
 ### 3. db.php の設定を編集
 
 ```php
-define('DB_PATH',  '/var/lib/support/support.db'); // DBパス
-define('SITE_URL', 'https://example.com/support'); // サイトURL
-define('MAIL_FROM','info@example.com');             // 差出人メールアドレス
-define('MAIL_STOP_THRESHOLD', 4);                  // 未アクセス何回でメール停止か
+define('DB_PATH',  '/var/www/db/example.com/support.db'); // DBパス
+define('SITE_URL', 'https://example.com/support');         // サイトURL
+define('MAIL_FROM','info@example.com');                    // 差出人メールアドレス
+define('MAIL_STOP_THRESHOLD', 4);                          // 未アクセス何回でメール停止か
 ```
 
-### 4. Nginx 設定
+### 4. Webルート側PHPのrequire_onceを絶対パスに設定
+
+`index.php` / `admin.php` / `api.php` の先頭：
+
+```php
+require_once '/var/www/scripts/example.com/support/admin_auth.php';
+```
+
+`admin_auth.php` / `issue_admin_url.php` の先頭：
+
+```php
+require_once '/var/www/scripts/example.com/support/db.php';
+```
+
+### 5. Nginx 設定
 
 ```nginx
 location /support/ {
-    root /var/www/html;
+    root /var/www/example.com;
     index index.php;
     try_files $uri $uri/ /support/index.php?$query_string;
-
-    # 内部用ファイルへの直接アクセスを禁止
-    location ~* /support/(db|admin_auth|issue_admin_url)\.php$ {
-        deny all;
-        return 403;
-    }
 
     location ~ \.php$ {
         fastcgi_pass unix:/run/php-fpm/www.sock;
@@ -94,11 +112,9 @@ location /support/ {
 }
 ```
 
-`db.php` / `admin_auth.php` / `issue_admin_url.php` はPHPの`require_once`で内部から読み込まれるファイルです。HTTPから直接アクセスされても実害はありませんが、上記設定で403を返すようにしています。
+`/var/www/scripts/` および `/var/www/db/` はnginxのWebルート外のため、HTTPから直接アクセスできません。
 
-SQLiteデータベースは `/var/lib/support/support.db`（Webルート外）に配置するため、Nginxから直接ダウンロードできません。
-
-### 5. php-fpm のユーザー設定
+### 6. php-fpm のユーザー設定
 
 `/etc/php-fpm.d/www.conf` でnginxと同じユーザーを指定します。
 
@@ -113,14 +129,14 @@ group = nginx
 chown -R nginx:nginx /var/lib/php/session
 ```
 
-### 6. DBの初期化
+### 7. DBの初期化
 
 初回アクセス時に自動でテーブルが作成されます。DBファイルのオーナーをnginxに設定してください。
 
 ```bash
 # 初回アクセス後
-chown nginx:nginx /var/lib/support/support.db
-chmod 640 /var/lib/support/support.db
+chown nginx:nginx /var/www/db/example.com/support.db
+chmod 664 /var/www/db/example.com/support.db
 ```
 
 ## 主催者アクセスURLの発行
@@ -132,7 +148,7 @@ chmod 640 /var/lib/support/support.db
 ### SSH で発行する
 
 ```bash
-ssh your-server 'php /var/www/html/support/issue_admin_url.php'
+ssh your-server 'php /var/www/scripts/example.com/support/issue_admin_url.php'
 ```
 
 出力されたURLをブラウザで開いてください。
@@ -143,13 +159,13 @@ ssh your-server 'php /var/www/html/support/issue_admin_url.php'
 
 > 「主催者アクセスURLを発行して」
 
-ClaudeがSSH経由でVPS上の `php /var/www/html/support/issue_admin_url.php` を実行してURLを返します。
+ClaudeがSSH経由でVPS上の `php /var/www/scripts/example.com/support/issue_admin_url.php` を実行してURLを返します。
 
 `issue_admin_url.php` はHTTPアクセスを403で拒否するため、Web経由でのURL発行はできません。
 
 ## データベース
 
-SQLiteファイルは `/var/lib/support/support.db`（Webルート外）に配置します。Nginxから直接ダウンロードできない場所です。
+SQLiteファイルは `/var/www/db/example.com/support.db`（Webルート外）に配置するため、Nginxから直接ダウンロードできません。
 
 | テーブル | 内容 |
 |---|---|
